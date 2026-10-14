@@ -312,6 +312,100 @@ workbuddy-doctor --refresh
 
 ---
 
+## Finding out which models you can use
+
+### Listing the catalog
+
+```bash
+curl http://127.0.0.1:8799/v1/models
+```
+
+```bash
+workbuddy-doctor                     # shows the model catalog section
+workbuddy-doctor --json | jq '.editions[].modelSample'
+```
+
+### The catalog is not the same as "callable"
+
+`/v3/config` returns the account's **entire roster**, and it mixes real chat
+models with entries that cannot serve a chat request — completion-only models,
+small-parameter models, and image backends. Those appear in the list but fail
+when used:
+
+| Model | Result | Reason |
+|---|---|---|
+| `minimax-m2.5` | ❌ `11102` | model not found for this account |
+| `glm-5.1` | ❌ `11102` | model not found for this account |
+| `hunyuan-image-alpha` | ❌ `11103` | `Backend [hunyuan-stream] is not supported` |
+| `codewise-completions` | ❌ `11102` | completion-only entry |
+
+So **picking an id from the plain list is a reliable way to get a confusing
+failure.** Measure instead:
+
+```bash
+workbuddy-doctor --probe-models        # probe the first 20 likely-chat ids
+workbuddy-doctor --probe-models=50     # probe more
+workbuddy-doctor --model=deepseek-v4.1-flash   # probe exactly one id
+```
+
+```
+=== Probing which models actually respond ===
+  [cn] probed 6 of 33 — 5 usable, 1 unusable
+     usable:
+       ✓ default                  1137ms
+       ✓ deepseek-v4-pro          1489ms
+       ✓ deepseek-v4-flash         901ms
+       ✓ deepseek-v4.1-flash       980ms
+       ✓ deepseek-v3-2-volc       1478ms
+     unusable (listed but not callable):
+       ✗ minimax-m2.5             not a chat model
+```
+
+Through HTTP, the same measurement is available as an annotated model list:
+
+```bash
+curl 'http://127.0.0.1:8799/v1/models?probe=true&limit=5'
+```
+
+```json
+{
+  "object": "list",
+  "data": [ { "id": "deepseek-v4.1-flash", "probe": "usable" } ],
+  "probe": {
+    "edition": "cn",
+    "probed": 5,
+    "available": ["default", "deepseek-v4-pro", "deepseek-v4-flash", "..."],
+    "unusable": [{ "id": "minimax-m2.5", "reason": "not a chat model" }],
+    "undetermined": []
+  }
+}
+```
+
+| Query | Behaviour |
+|---|---|
+| `/v1/models` | Plain list. Unchanged shape — existing clients are unaffected. |
+| `/v1/models?probe=true` | Measure, then annotate every entry |
+| `/v1/models?probe=true&limit=N` | Bound how many are measured (max 50) |
+| `/v1/models?probe=cached` | Return the last run without new requests |
+| `/v1/models?probe=refresh` | Ignore the cache and measure again |
+
+Over MCP, the `workbuddy_probe` tool does the same, so an agent can check before
+choosing a model.
+
+### Cost and caching
+
+Each probe is a **real request that spends account quota**, so:
+
+- probing is **opt-in** — a plain `workbuddy-doctor` run stays free
+- only the first **20** likely-chat models are probed by default (raise with `=N`)
+- results are cached for **30 minutes** per edition
+- probes run **3 at a time** to avoid the upstream's 429 rate limit
+- a rate-limited probe is reported as `undetermined`, **never as unusable** — a
+  transient 429 must not make a working model look broken
+- `POST /refresh` and `workbuddy_refresh` clear the cache
+
+---
+
 ## Supported agents
 
 | Agent | Protocol | Status |
@@ -385,6 +479,7 @@ claude mcp add workbuddy -- npx -y workbuddy-bridge-mcp
 |---|---|
 | `workbuddy_ask` | Send a prompt (accepts an `edition` argument) |
 | `workbuddy_models` | List models available to an edition |
+| `workbuddy_probe` | Test which models actually respond |
 | `workbuddy_status` | Detected editions and their identities |
 | `workbuddy_refresh` | Re-detect the machine and refresh tokens |
 
@@ -497,6 +592,7 @@ in "pure Node" mode that prints the secret.
 workbuddy-bridge/
 ├── http-server.js   HTTP server: routing and response translation for three protocols
 ├── providers.js     Provider registry: which edition is usable, which is default
+├── probe.js         Model availability probing and caching
 ├── responses.js     Bidirectional OpenAI Responses protocol translation
 ├── upstream.js      Upstream calls: headers, SSE parsing, tool-call reassembly
 ├── credentials.js   Token read/decrypt (AES-256-GCM) + automatic refresh
@@ -510,6 +606,7 @@ workbuddy-bridge/
 | `locate.js` | Classify and discover exes per edition (env / install root / registry / cache) |
 | `credentials.js` | Locate credentials → spawn the matching exe for the key → decrypt → refresh |
 | `providers.js` | Decide "installed" vs "usable", and pick the default edition |
+| `probe.js` | Measure which catalog entries answer a chat request, with caching |
 | `upstream.js` | Per-edition origin, identity headers, and default model |
 | `http-server.js` | Routing, edition selection, three-protocol translation |
 

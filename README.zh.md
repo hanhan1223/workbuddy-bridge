@@ -299,6 +299,96 @@ workbuddy-doctor --refresh
 
 ---
 
+## 查看哪些模型能用
+
+### 列出模型目录
+
+```bash
+curl http://127.0.0.1:8799/v1/models
+```
+
+```bash
+workbuddy-doctor                     # 输出里有模型目录段落
+workbuddy-doctor --json              # 机器可读，含完整列表
+```
+
+### 目录 ≠ 可调用
+
+`/v3/config` 返回的是账号的**完整名册**，里面混着无法处理对话请求的条目 ——
+补全专用模型、小参数模型、图像后端。它们在列表里，但一用就报错：
+
+| 模型 | 结果 | 原因 |
+|---|---|---|
+| `minimax-m2.5` | ❌ `11102` | 该账号找不到此模型 |
+| `glm-5.1` | ❌ `11102` | 该账号找不到此模型 |
+| `hunyuan-image-alpha` | ❌ `11103` | `Backend [hunyuan-stream] is not supported` |
+| `codewise-completions` | ❌ `11102` | 补全专用条目 |
+
+**所以直接从列表里挑 id，是一种很稳定的踩坑方式。** 应该实测：
+
+```bash
+workbuddy-doctor --probe-models        # 探测前 20 个可能是对话模型的 id
+workbuddy-doctor --probe-models=50     # 探测更多
+workbuddy-doctor --model=deepseek-v4.1-flash   # 只探测指定的一个
+```
+
+```
+=== Probing which models actually respond ===
+  [cn] probed 6 of 33 — 5 usable, 1 unusable
+     usable:
+       ✓ default                  1137ms
+       ✓ deepseek-v4-pro          1489ms
+       ✓ deepseek-v4-flash         901ms
+       ✓ deepseek-v4.1-flash       980ms
+       ✓ deepseek-v3-2-volc       1478ms
+     unusable (listed but not callable):
+       ✗ minimax-m2.5             not a chat model
+```
+
+通过 HTTP 也能拿到同一份测量结果（带标注的模型列表）：
+
+```bash
+curl 'http://127.0.0.1:8799/v1/models?probe=true&limit=5'
+```
+
+```json
+{
+  "object": "list",
+  "data": [ { "id": "deepseek-v4.1-flash", "probe": "usable" } ],
+  "probe": {
+    "edition": "cn",
+    "probed": 5,
+    "available": ["default", "deepseek-v4-pro", "deepseek-v4-flash", "..."],
+    "unusable": [{ "id": "minimax-m2.5", "reason": "not a chat model" }],
+    "undetermined": []
+  }
+}
+```
+
+| 查询 | 行为 |
+|---|---|
+| `/v1/models` | 普通列表，**结构与原来完全一致**，不影响现有客户端 |
+| `/v1/models?probe=true` | 先测量，再给每个条目加标注 |
+| `/v1/models?probe=true&limit=N` | 限制测量数量（最多 50） |
+| `/v1/models?probe=cached` | 直接返回上次结果，不发新请求 |
+| `/v1/models?probe=refresh` | 忽略缓存重新测 |
+
+MCP 侧的 `workbuddy_probe` 工具做同样的事，agent 可以在选模型前先自查。
+
+### 成本与缓存
+
+每次探测都是**真实请求、消耗账号额度**，所以：
+
+- 探测是**可选的** —— 普通 `workbuddy-doctor` 不花额度
+- 默认只测前 **20** 个可能是对话模型的 id（用 `=N` 提高）
+- 结果按版本缓存 **30 分钟**
+- **并发 3 个**，避免触发上游 429 限流
+- 被限流的探测标为 `undetermined`，**绝不标为不可用** ——
+  临时的 429 不能让一个能用的模型看起来是坏的
+- `POST /refresh` 与 `workbuddy_refresh` 会清空缓存
+
+---
+
 ## 支持的 agent
 
 | Agent | 协议 | 状态 |
@@ -371,7 +461,8 @@ claude mcp add workbuddy -- npx -y workbuddy-bridge-mcp
 | 工具 | 说明 |
 |---|---|
 | `workbuddy_ask` | 发一条 prompt（可带 `edition` 参数）|
-| `workbuddy_models` | 列出某版本可用的模型 |
+| `workbuddy_models` | 列出某版本可用的模型（账号名册） |
+| `workbuddy_probe` | 实测哪些模型真的能响应 |
 | `workbuddy_status` | 检测到的版本 + 各自身份 |
 | `workbuddy_refresh` | 重新检测机器 + 刷新令牌 |
 
@@ -481,6 +572,7 @@ process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()
 workbuddy-bridge/
 ├── http-server.js   HTTP 服务：三套协议的路由与响应转换
 ├── providers.js     提供方注册表：哪个版本能用、默认用哪个
+├── probe.js         模型可用性探测与缓存
 ├── responses.js     OpenAI Responses 协议的双向转换
 ├── upstream.js      调用上游：请求头、SSE 解析、工具调用重组
 ├── credentials.js   令牌读取/解密（AES-256-GCM）+ 自动刷新
@@ -494,6 +586,7 @@ workbuddy-bridge/
 | `locate.js` | 按版本分类探测 exe（环境变量/安装目录/注册表/缓存）|
 | `credentials.js` | 定位凭据 → spawn 对应 exe 取密钥 → 解密 → 刷新 |
 | `providers.js` | 判断「装了」还是「能用」，决定默认版本 |
+| `probe.js` | 实测哪些目录条目能响应对话请求，带缓存 |
 | `upstream.js` | 按版本差异化 origin、身份头、默认模型 |
 | `http-server.js` | 路由、版本选择、三协议转换 |
 

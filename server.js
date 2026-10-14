@@ -14,6 +14,7 @@
 
 import { getProviders, resolveProvider, refreshProvider, getModels, invalidateCaches } from './providers.js';
 import { chat } from './upstream.js';
+import { probeModels, clearProbeCache } from './probe.js';
 
 // The MCP SDK is an optional dependency: the HTTP server in this package has
 // no external dependencies at all, so installing the package does not pull it
@@ -83,8 +84,39 @@ const TOOLS = [
   },
   {
     name: 'workbuddy_models',
-    description: 'List the WorkBuddy models available to your account.',
+    description:
+      'List the WorkBuddy models available to your account. The listing is the account ' +
+      'roster, which includes some entries that cannot serve chat; use workbuddy_probe ' +
+      'to find out which ones actually respond.',
     inputSchema: { type: 'object', properties: { edition: EDITION_ARG } },
+  },
+  {
+    name: 'workbuddy_probe',
+    description:
+      'Test which WorkBuddy models actually answer a chat request, and return the usable ' +
+      'ids. The catalog from /v3/config mixes real chat models with completion-only, ' +
+      'small-parameter and image entries; those appear in workbuddy_models but fail with ' +
+      '11102/11103 when used. Call this before choosing a model, or after a model fails. ' +
+      'Each probe spends a small amount of account quota, so results are cached.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        edition: EDITION_ARG,
+        model: {
+          type: 'string',
+          description:
+            'Probe a single model id instead of the default sample, e.g. "deepseek-v4.1-flash".',
+        },
+        limit: {
+          type: 'number',
+          description: 'How many models to probe (default 20, max 50).',
+        },
+        refresh: {
+          type: 'boolean',
+          description: 'Ignore the cached probe results and measure again.',
+        },
+      },
+    },
   },
   {
     name: 'workbuddy_status',
@@ -144,6 +176,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'workbuddy_refresh') {
       invalidateCaches();
+      clearProbeCache();
       const results = await refreshProvider(normalizeEdition(args.edition));
       const registry = await getProviders({ refresh: true });
       const lines = results.map((r) =>
@@ -164,7 +197,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const ctx = m.contextWindow ? ` (ctx ${m.contextWindow})` : '';
         return `${m.id}${label}${ctx}`;
       });
-      return text(`Edition: ${provider.edition} (${provider.domain})\n${lines.join('\n')}`);
+      return text(
+        `Edition: ${provider.edition} (${provider.domain})\n${lines.join('\n')}\n\n` +
+          'Note: this is the account roster. Some entries cannot serve chat requests; ' +
+          'call workbuddy_probe to find out which ones actually respond.',
+      );
+    }
+
+    if (name === 'workbuddy_probe') {
+      const provider = await resolveProvider(normalizeEdition(args.edition));
+      const rawLimit = typeof args.limit === 'number' ? args.limit : undefined;
+      const probe = await probeModels(provider.edition, {
+        refresh: args.refresh === true,
+        limit: rawLimit !== undefined ? Math.min(Math.max(1, Math.floor(rawLimit)), 50) : undefined,
+        only: typeof args.model === 'string' && args.model !== '' ? args.model : undefined,
+      });
+
+      if (probe.notInCatalog !== undefined) {
+        const ids = (await getModels(provider.edition)).map((m) => m.id);
+        const nearby = ids.filter((id) => id.includes(probe.notInCatalog.slice(0, 4))).slice(0, 6);
+        return text(
+          `"${probe.notInCatalog}" is not in the ${provider.edition} catalog (${probe.total} models).` +
+            (nearby.length > 0 ? `\nSimilar ids here: ${nearby.join(', ')}` : '') +
+            '\nModel ids are not shared between the international and China editions.',
+          true,
+        );
+      }
+
+      const usable = probe.results.filter((r) => r.ok === true);
+      const unusable = probe.results.filter((r) => r.ok === false);
+      const unknown = probe.results.filter((r) => r.ok === null);
+
+      const lines = [
+        `Edition: ${provider.edition} — probed ${probe.probed} of ${probe.total}` +
+          (probe.cached ? ' (cached)' : ''),
+        '',
+        `Usable (${usable.length}):`,
+        ...usable.map((r) => `  ${r.model}  ${r.ms}ms`),
+      ];
+      if (unusable.length > 0) {
+        lines.push('', `Unusable — listed but not callable (${unusable.length}):`);
+        for (const r of unusable) lines.push(`  ${r.model}  ${r.reason}`);
+      }
+      if (unknown.length > 0) {
+        lines.push(
+          '',
+          `Undetermined — upstream was busy, retry later (${unknown.length}):`,
+          `  ${unknown.map((r) => r.model).join(', ')}`,
+        );
+      }
+      return text(lines.join('\n'), usable.length === 0);
     }
 
     if (name === 'workbuddy_ask') {

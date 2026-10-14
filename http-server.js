@@ -30,6 +30,7 @@ import { createServer } from 'node:http';
 
 import { chat, WorkBuddyBusyError } from './upstream.js';
 import { getProviders, resolveProvider, refreshProvider, getModels, invalidateCaches } from './providers.js';
+import { probeModels, readProbeCache, clearProbeCache } from './probe.js';
 import { responsesToChat, buildResponseObject, createResponsesStream } from './responses.js';
 
 /** Parse `--port N` / `--port=N` / `--model X` / `--edition X` / `--help` / `--version`. */
@@ -789,6 +790,43 @@ function providerSummary(entry) {
   };
 }
 
+/**
+ * Shape a probe run for the model-list response.
+ *
+ * `available` is the answer callers actually want: the ids that were measured
+ * to work. `unusable` is what saves them — an id that is listed but not
+ * callable, with the reason, so a failure can be diagnosed without probing.
+ */
+function describeProbe(probe, models) {
+  const byId = new Map(probe.results.map((r) => [r.model, r]));
+  return {
+    edition: probe.edition,
+    cached: probe.cached === true,
+    stale: probe.stale === true,
+    probedAt: new Date(probe.probedAt).toISOString(),
+    total: probe.total,
+    probed: probe.probed,
+    available: probe.results.filter((r) => r.ok === true).map((r) => r.model),
+    unusable: probe.results
+      .filter((r) => r.ok === false)
+      .map((r) => ({ id: r.model, reason: r.reason, detail: r.detail })),
+    undetermined: probe.results.filter((r) => r.ok === null).map((r) => r.model),
+    // Every catalog entry, annotated when it was measured.
+    data: models.map((m) => {
+      const r = byId.get(m.id);
+      return r === undefined
+        ? { id: m.id, object: 'model', owned_by: `workbuddy-${probe.edition}`, probe: 'not-tested' }
+        : {
+            id: m.id,
+            object: 'model',
+            owned_by: `workbuddy-${probe.edition}`,
+            probe: r.ok === true ? 'usable' : r.ok === false ? 'unusable' : 'undetermined',
+            ...(r.ok === false ? { reason: r.reason } : {}),
+          };
+    }),
+  };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${HOST}:${PORT}`);
   const prefixed = splitEditionPrefix(url.pathname);
@@ -826,6 +864,7 @@ const server = createServer(async (req, res) => {
      */
     if (req.method === 'POST' && path === '/refresh') {
       invalidateCaches();
+      clearProbeCache();
       const body = await readBody(req, res);
       const requested = prefixed.edition ?? requestedEdition(req, body);
       const results = await refreshProvider(requested);
@@ -842,13 +881,51 @@ const server = createServer(async (req, res) => {
       });
     }
 
+    /**
+     * Model list.
+     *
+     * `?probe=true` additionally reports which entries actually answer a chat
+     * request. The catalog mixes real chat models with completion-only, small,
+     * and image entries; those appear in the list but fail with 11102/11103 when
+     * used, so a caller choosing from the plain list can pick an unusable id.
+     *
+     * Probing costs quota, so it is opt-in, bounded, and cached; `?probe=cached`
+     * returns a previous run without making new requests.
+     */
     if (req.method === 'GET' && path === '/v1/models') {
       const provider = await resolveProvider(prefixed.edition ?? requestedEdition(req, null));
       const models = await getModels(provider.edition);
-      return json(res, 200, {
+
+      const probeParam = (url.searchParams.get('probe') ?? '').toLowerCase();
+      const base = {
         object: 'list',
         data: models.map((m) => ({ id: m.id, object: 'model', owned_by: `workbuddy-${provider.edition}` })),
+      };
+
+      if (probeParam === '' || probeParam === 'false') return json(res, 200, base);
+
+      const requestedLimit = Number(url.searchParams.get('limit'));
+      const probeLimit =
+        Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 50) : undefined;
+
+      if (probeParam === 'cached') {
+        // Match on the same shape a probe run would have used, so asking for the
+        // cached answer to a specific limit returns that limit's measurement.
+        const cached = readProbeCache(provider.edition, { limit: probeLimit ?? 20 });
+        if (cached === undefined) {
+          return json(res, 200, {
+            ...base,
+            probe: { edition: provider.edition, cached: true, available: false, note: 'no cached probe; call ?probe=true first' },
+          });
+        }
+        return json(res, 200, { ...base, probe: describeProbe(cached, models) });
+      }
+
+      const probe = await probeModels(provider.edition, {
+        refresh: probeParam === 'refresh',
+        limit: probeLimit,
       });
+      return json(res, 200, { ...base, probe: describeProbe(probe, models) });
     }
 
     if (req.method === 'POST' && path === '/v1/messages') {

@@ -20,15 +20,28 @@ import { join } from 'node:path';
 import { describeDiscovery, EDITION_LABEL } from './locate.js';
 import { getProviders, refreshProvider, getModels, invalidateCaches } from './providers.js';
 import { chat } from './upstream.js';
+import { probeModels, looksChatCapable } from './probe.js';
 
-/** Parse `--refresh` / `--json` / `--help`. */
+/** Parse `--refresh` / `--json` / `--help` / `--probe-models[=N]` / `--model=id`. */
 function parseArgs(argv) {
-  const opts = { refresh: false, json: false, help: false };
+  const opts = { refresh: false, json: false, help: false, probeModels: false, probeLimit: undefined, model: undefined };
   for (const arg of argv) {
     if (arg === '--refresh' || arg === '-r') opts.refresh = true;
     else if (arg === '--json') opts.json = true;
     else if (arg === '-h' || arg === '--help') opts.help = true;
-    else console.error(`unknown option: ${arg}`);
+    else if (arg === '--probe-models') opts.probeModels = true;
+    else if (arg.startsWith('--probe-models=')) {
+      opts.probeModels = true;
+      const n = Number(arg.slice('--probe-models='.length));
+      if (Number.isInteger(n) && n > 0) opts.probeLimit = n;
+      else console.error(`--probe-models expects a positive count, got "${arg}"`);
+    } else if (arg.startsWith('--model=')) {
+      const id = arg.slice('--model='.length).trim();
+      if (id !== '') {
+        opts.probeModels = true;
+        opts.model = id;
+      }
+    } else console.error(`unknown option: ${arg}`);
   }
   return opts;
 }
@@ -43,9 +56,12 @@ Usage
   node doctor.js [options]          (from a cloned checkout)
 
 Options
-  --refresh, -r    Force a token refresh for every detected edition
-  --json           Emit the report as JSON
-  -h, --help       Show this help
+  --refresh, -r        Force a token refresh for every detected edition
+  --probe-models[=N]   Test which listed models actually answer a chat request
+                       (default: first ${20} likely-chat ids; each probe spends quota)
+  --model=<id>         Probe a single model id, e.g. --model=deepseek-v4.1-flash
+  --json               Emit the report as JSON
+  -h, --help           Show this help
 
 Checks performed
   1. Node.js version and host platform
@@ -53,7 +69,14 @@ Checks performed
   3. Both editions: executable discovery (env / install root / registry / cache)
   4. Both editions: credential decrypt + account identity
   5. Both editions: live model catalog fetch
-  6. Live chat round-trip against the active provider`);
+  6. Live chat round-trip against the active provider
+  7. With --probe-models: which catalog entries are really callable
+
+Why probing matters
+  The catalog from /v3/config is the account's whole roster, and it mixes real
+  chat models with completion-only, small-parameter, and image entries. Those
+  exist in the list but fail with 11102/11103 when a chat request uses them,
+  so being listed does not mean being usable.`);
   process.exit(0);
 }
 
@@ -246,6 +269,98 @@ for (const entry of registry.available) {
     record.modelError = String(error?.message ?? error);
     if (!opts.json) console.error(`  [${entry.edition}] FAILED: ${error.message}`);
     check(`model catalog (${entry.edition})`, false, String(error?.message ?? error));
+  }
+}
+
+// Probing is opt-in because every probe is a real request against the account's
+// quota; a plain doctor run must stay free.
+if (opts.probeModels) {
+  if (!opts.json) {
+    console.log('');
+    console.log('=== Probing which models actually respond ===');
+  }
+
+  for (const entry of registry.available) {
+    const record = report.editions.find((e) => e.edition === entry.edition);
+    let probe;
+    try {
+      probe = await probeModels(entry.edition, {
+        refresh: true,
+        limit: opts.probeLimit ?? 20,
+        only: opts.model,
+      });
+    } catch (error) {
+      record.probe = { error: String(error?.message ?? error) };
+      if (!opts.json) console.error(`  [${entry.edition}] FAILED: ${error.message}`);
+      check(`model probe (${entry.edition})`, false, String(error?.message ?? error));
+      continue;
+    }
+
+    const usable = probe.results.filter((r) => r.ok === true);
+    const unusable = probe.results.filter((r) => r.ok === false);
+    const unknown = probe.results.filter((r) => r.ok === null);
+
+    record.probe = {
+      total: probe.total,
+      probed: probe.probed,
+      usable: usable.map((r) => r.model),
+      unusable: unusable.map((r) => ({ model: r.model, reason: r.reason })),
+      unknown: unknown.map((r) => r.model),
+    };
+
+    if (opts.json) continue;
+
+    // A requested id that is absent from this account's catalog is almost always
+    // a model name borrowed from the other edition, which is worth saying
+    // outright rather than printing "0 probed".
+    if (probe.notInCatalog !== undefined) {
+      const nearby = (await getModels(entry.edition))
+        .map((m) => m.id)
+        .filter((id) => id.includes(probe.notInCatalog.slice(0, 4)))
+        .slice(0, 6);
+      console.log(
+        `  [${entry.edition}] "${probe.notInCatalog}" is not in this account's catalog (${probe.total} models).`,
+      );
+      if (nearby.length > 0) console.log(`     similar ids here: ${nearby.join(', ')}`);
+      console.log('     model ids are not shared between the international and China editions.');
+      check(`model probe (${entry.edition})`, false, `"${probe.notInCatalog}" not in catalog`);
+      continue;
+    }
+
+    console.log(
+      `  [${entry.edition}] probed ${probe.probed} of ${probe.total} — ` +
+        `${usable.length} usable, ${unusable.length} unusable` +
+        (unknown.length > 0 ? `, ${unknown.length} undetermined` : ''),
+    );
+
+    if (usable.length > 0) {
+      console.log('     usable:');
+      for (const r of usable) console.log(`       ✓ ${r.model.padEnd(24)} ${r.ms}ms`);
+    }
+    if (unusable.length > 0) {
+      console.log('     unusable (listed but not callable):');
+      for (const r of unusable) {
+        console.log(`       ✗ ${r.model.padEnd(24)} ${r.reason}${r.detail ? ` — ${r.detail.slice(0, 70)}` : ''}`);
+      }
+    }
+    if (unknown.length > 0) {
+      console.log('     undetermined (upstream was busy, retry later):');
+      for (const r of unknown) console.log(`       ? ${r.model}`);
+    }
+
+    const hinted = probe.results.filter((r) => looksChatCapable(r.model) && r.ok === false);
+    if (hinted.length > 0) {
+      console.log(
+        `     note: ${hinted.map((r) => r.model).join(', ')} look chat-capable but failed; ` +
+          'this may be an account entitlement rather than a model-shape problem.',
+      );
+    }
+
+    check(
+      `model probe (${entry.edition})`,
+      usable.length > 0,
+      `${usable.length} usable of ${probe.probed} probed`,
+    );
   }
 }
 
