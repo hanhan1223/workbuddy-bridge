@@ -157,6 +157,7 @@ function fromInstallRoots(edition) {
 function readUninstallRoot(root) {
   const script = [
     '[Console]::OutputEncoding=[Text.Encoding]::UTF8;',
+    '$ProgressPreference="SilentlyContinue";',
     '$Root=$env:WB_UNINSTALL_ROOT;',
     '$path="Registry::"+$Root;',
     'if (-not (Test-Path -LiteralPath $path)) { exit 2 };',
@@ -186,11 +187,20 @@ function readUninstallRoot(root) {
   // be combined with positional script arguments.
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
 
+  // `stdio` must pin stderr to `ignore`. Left inherited (the execFileSync
+  // default), PowerShell's own progress records — "Preparing modules for first
+  // use." on a cold profile — reach the user's terminal as raw CLIXML noise,
+  // which reads like the tool crashed when it actually succeeded. A pipe we
+  // never drain would risk filling and blocking instead, so drop it outright:
+  // nothing this script writes to stderr is worth surfacing.
+  // $ProgressPreference is also set inside the script; both are needed, because
+  // the first-run banner is emitted before the script body takes effect.
   const stdout = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
     encoding: 'utf8',
     timeout: 15000,
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'ignore'],
     env: { ...process.env, WB_UNINSTALL_ROOT: root },
   });
 
