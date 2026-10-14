@@ -1,25 +1,49 @@
 {
   "name": "workbuddy-bridge",
   "version": "1.1.0",
-  "private": true,
   "type": "module",
-  "description": "Local HTTP/MCP bridge exposing a WorkBuddy desktop account (international workbuddy.ai and/or China workbuddy.cn) as an OpenAI- and Anthropic-compatible API for Claude Code, Codex, and other coding agents.",
+  "description": "Use a WorkBuddy desktop account (international workbuddy.ai and/or China workbuddy.cn) as an OpenAI- and Anthropic-compatible API — a local model provider for Claude Code, Codex, and any coding agent.",
   "keywords": [
     "workbuddy",
+    "workbuddy-ai",
+    "codebuddy",
     "claude-code",
     "codex",
     "mcp",
     "anthropic",
     "openai",
+    "openai-compatible",
     "bridge",
-    "proxy"
+    "proxy",
+    "llm",
+    "ai-coding"
   ],
   "license": "MIT",
+  "author": "hanhan1223",
+  "homepage": "https://github.com/hanhan1223/workbuddy-bridge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hanhan1223/workbuddy-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hanhan1223/workbuddy-bridge/issues"
+  },
   "bin": {
     "workbuddy-bridge": "./http-server.js",
-    "workbuddy-bridge-mcp": "./server.js"
+    "workbuddy-bridge-mcp": "./server.js",
+    "workbuddy-doctor": "./doctor.js"
   },
   "main": "./http-server.js",
+  "exports": {
+    ".": "./providers.js",
+    "./upstream": "./upstream.js",
+    "./credentials": "./credentials.js",
+    "./locate": "./locate.js",
+    "./providers": "./providers.js",
+    "./responses": "./responses.js",
+    "./server": "./server.js",
+    "./doctor": "./doctor.js"
+  },
   "files": [
     "http-server.js",
     "responses.js",
@@ -31,18 +55,26 @@
     "doctor.js",
     "README.md",
     "HTTP-BRIDGE.md",
+    "DISCLAIMER.md",
     "LICENSE"
   ],
   "scripts": {
     "start": "node http-server.js",
     "mcp": "node server.js",
-    "doctor": "node doctor.js"
+    "doctor": "node doctor.js",
+    "prepublishOnly": "node --check http-server.js && node --check providers.js && node --check credentials.js && node --check locate.js && node --check upstream.js && node --check responses.js && node --check server.js && node --check doctor.js"
   },
   "engines": {
     "node": ">=20.3.0"
   },
+  "os": [
+    "win32"
+  ],
   "dependencies": {},
   "optionalDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
