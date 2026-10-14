@@ -148,6 +148,11 @@ workbuddy-doctor
 | `detected editions` | 实际可用的版本（`ai` / `cn` / 两者）|
 | `active edition` | 默认消耗哪个账号的额度 |
 
+> ⚠️ **`workbuddy-doctor` 是一次性检测，它不会启动服务。**
+> 它验证账号可用后就退出了。如果紧接着去 curl 8799 端口，会得到
+> `Could not connect to server` —— 因为此刻没有任何程序在监听。
+> 启动服务是下一步。
+
 ### 2. 启动服务
 
 ```bash
@@ -159,7 +164,18 @@ workbuddy-bridge
 [workbuddy-http] provider ai: unavailable — Could not find the international ... executable.
 [workbuddy-http] provider cn: OK  domain=www.workbuddy.cn default=auto
 [workbuddy-http] active provider: cn
+[workbuddy-http]
+[workbuddy-http] Ready. Leave this window open — closing it stops the bridge.
+[workbuddy-http] Query it from another terminal, e.g.:
+[workbuddy-http]   curl http://127.0.0.1:8799/health
 ```
+
+**两点必须知道：**
+
+1. **这个窗口要一直开着。** 服务在前台运行，关掉终端或按 `Ctrl+C` 它就停了，
+   agent 会连不上。想让它后台常驻，见[后台常驻](#后台常驻)。
+2. **请求要从另一个终端发。** 第一个终端被服务占着，`curl` 这类命令需要
+   自己开一个窗口。
 
 启动即打印**实际检测结果** —— 正在消耗谁的额度，一眼可见。
 
@@ -412,6 +428,44 @@ MCP 侧的 `workbuddy_probe` 工具做同样的事，agent 可以在选模型前
   模型目录（按版本打标）         ✅
   /refresh + 404               ✅
 ```
+
+---
+
+## 后台常驻
+
+服务在前台运行，关掉终端或注销 Windows 就会停。想让它一直可用，
+可以注册成登录时自启的计划任务：
+
+```powershell
+# 先确认安装位置
+npm root -g
+# 例如 C:\Users\<你>\AppData\Roaming\npm\node_modules
+
+$dir = "C:\Users\<你>\AppData\Roaming\npm\node_modules\workbuddy-bridge"
+
+$action  = New-ScheduledTaskAction -Execute "node" -Argument "$dir\http-server.js" -WorkingDirectory $dir
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+Register-ScheduledTask -TaskName "WorkBuddy Bridge" -Action $action -Trigger $trigger
+```
+
+日常管理：
+
+```powershell
+Start-ScheduledTask  -TaskName "WorkBuddy Bridge"
+Stop-ScheduledTask   -TaskName "WorkBuddy Bridge"
+Unregister-ScheduledTask -TaskName "WorkBuddy Bridge" -Confirm:$false
+```
+
+**检查它是否在运行：**
+
+```powershell
+curl http://127.0.0.1:8799/health
+```
+
+这里报 `Could not connect to server` 只代表一件事：**服务没在跑**。
+它不是配置错误。
+
+> `workbuddy-doctor` 会报告当前是否已有服务在监听，不想敲 curl 时用它更快。
 
 ---
 

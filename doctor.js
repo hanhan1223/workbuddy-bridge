@@ -81,6 +81,8 @@ Why probing matters
 }
 
 /** Collected report; printed as text or JSON at the end. */
+const DEFAULT_PORT = 8799;
+
 const report = {
   machine: {},
   environment: {},
@@ -244,7 +246,7 @@ if (usable.length === 0) {
     console.error('Install and log into the WorkBuddy desktop app, then run this again.');
   }
   report.ok = false;
-  finish();
+  await finish();
 }
 
 if (!opts.json) {
@@ -432,9 +434,9 @@ if (active !== undefined) {
 }
 
 report.ok = report.checks.every((c) => c.passed);
-finish();
+await finish();
 
-function finish() {
+async function finish() {
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2));
     process.exit(report.ok ? 0 : 1);
@@ -446,12 +448,60 @@ function finish() {
     console.log(`  detected editions    ${usable.join(', ')}`);
     console.log(`  active edition       ${registry.defaultEdition} (${EDITION_LABEL[registry.defaultEdition]})`);
   }
+
+  // Say whether the server is actually up.
+  //
+  // A bare "all checks passed" reads as "everything is ready to use", which is
+  // how people end up curling port 8799 against a process they never started.
+  // This command only proves the account and the pipeline work; serving needs a
+  // separate long-running process, so name that explicitly.
+  const running = await isServerRunning();
+  if (running !== undefined) {
+    console.log('');
+    console.log(`  server               running on http://127.0.0.1:${running.port}`);
+    if (running.edition !== undefined) {
+      console.log(`  serving edition      ${running.edition}`);
+    }
+    console.log('                       endpoints are ready to use.');
+  }
+
   const failed = report.checks.filter((c) => !c.passed);
-  if (report.ok) {
-    console.log('  All checks passed. The bridge should work.');
+  if (report.ok && running === undefined) {
+    console.log('');
+    console.log('  All checks passed — the account and pipeline work.');
+    console.log('');
+    console.log('  This command does NOT start the server. It exits when it finishes.');
+    console.log('  To use the API, start the server and leave that terminal open:');
+    console.log('');
+    console.log('      workbuddy-bridge');
+    console.log('');
+    console.log(`  Then query it from another terminal, e.g.:`);
+    console.log(`      curl http://127.0.0.1:${DEFAULT_PORT}/v1/models`);
+  } else if (report.ok) {
+    console.log('  All checks passed.');
   } else {
     console.log(`  ${failed.length} check(s) failed:`);
     for (const f of failed) console.log(`    - ${f.name}: ${f.detail}`);
   }
   process.exit(report.ok ? 0 : 1);
+}
+
+/**
+ * Is a bridge already listening?
+ *
+ * Returns `{ port, edition }` when one answers, otherwise undefined. Any failure
+ * means "no server", which is the expected state and must not fail the run.
+ */
+async function isServerRunning() {
+  const port = Number(process.env.WORKBUDDY_MCP_PORT ?? '') || DEFAULT_PORT;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) return { port };
+    const body = await response.json();
+    return { port, edition: body.defaultEdition ?? body.provider };
+  } catch {
+    return undefined;
+  }
 }

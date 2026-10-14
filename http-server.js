@@ -1025,4 +1025,13 @@ server.listen(PORT, HOST, async () => {
   } catch (error) {
     console.error(`[workbuddy-http] provider detection failed: ${error?.message ?? error}`);
   }
+
+  // State the two things a first-time user gets wrong: this process must keep
+  // running, and requests come from a second terminal.
+  console.error('[workbuddy-http]');
+  console.error('[workbuddy-http] Ready. Leave this window open — closing it stops the bridge.');
+  console.error(`[workbuddy-http] Query it from another terminal, e.g.:`);
+  console.error(`[workbuddy-http]   curl http://${HOST}:${PORT}/health`);
+  console.error(`[workbuddy-http]   curl http://${HOST}:${PORT}/v1/models`);
+  console.error('[workbuddy-http] Press Ctrl+C to stop.');
 });

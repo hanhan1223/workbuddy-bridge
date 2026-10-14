@@ -153,6 +153,11 @@ Two fields are all you need:
 | `detected editions` | Which editions are actually usable (`ai` / `cn` / both) |
 | `active edition` | Which account's quota is spent by default |
 
+> ⚠️ **`workbuddy-doctor` is a one-shot check — it does not start the server.**
+> It verifies that the account works and then exits. If you curl port 8799 right
+> after, you will get `Could not connect to server`, because nothing is listening
+> yet. Starting the server is the next step.
+
 ### 2. Start the server
 
 ```bash
@@ -164,7 +169,20 @@ workbuddy-bridge
 [workbuddy-http] provider ai: unavailable — Could not find the international ... executable.
 [workbuddy-http] provider cn: OK  domain=www.workbuddy.cn default=auto
 [workbuddy-http] active provider: cn
+[workbuddy-http]
+[workbuddy-http] Ready. Leave this window open — closing it stops the bridge.
+[workbuddy-http] Query it from another terminal, e.g.:
+[workbuddy-http]   curl http://127.0.0.1:8799/health
 ```
+
+**Two things to know:**
+
+1. **This window must stay open.** The bridge runs in the foreground; closing the
+   terminal or pressing `Ctrl+C` stops it, and your agent loses connection.
+   To run it in the background instead, see
+   [Running in the background](#running-in-the-background).
+2. **Send requests from a second terminal.** The first one is occupied by the
+   server. Commands like `curl` need their own window.
 
 The detected result is printed at startup, so **which quota is being spent** is
 visible immediately.
@@ -429,6 +447,45 @@ Both single-edition (cn) and dual-edition (ai+cn) runs:
   Model catalog (tagged per edition) ✅
   /refresh + 404                     ✅
 ```
+
+---
+
+## Running in the background
+
+The bridge runs in the foreground, so it stops when you close the terminal or log
+out. To keep it available, register it as a scheduled task that starts at logon:
+
+```powershell
+# Find the install location first
+npm root -g
+# e.g. C:\Users\<you>\AppData\Roaming\npm\node_modules
+
+$dir = "C:\Users\<you>\AppData\Roaming\npm\node_modules\workbuddy-bridge"
+
+$action  = New-ScheduledTaskAction -Execute "node" -Argument "$dir\http-server.js" -WorkingDirectory $dir
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+Register-ScheduledTask -TaskName "WorkBuddy Bridge" -Action $action -Trigger $trigger
+```
+
+Then manage it with:
+
+```powershell
+Start-ScheduledTask  -TaskName "WorkBuddy Bridge"
+Stop-ScheduledTask   -TaskName "WorkBuddy Bridge"
+Unregister-ScheduledTask -TaskName "WorkBuddy Bridge" -Confirm:$false
+```
+
+**Check whether it is running:**
+
+```powershell
+curl http://127.0.0.1:8799/health
+```
+
+A `Could not connect to server` here means the bridge is not running — that is the
+only thing that error ever means, and it is not a configuration problem.
+
+> `workbuddy-doctor` reports whether a server is already listening, so it is a
+> quick way to check without a curl.
 
 ---
 
