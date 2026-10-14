@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-bridge",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "type": "module",
   "description": "Use a WorkBuddy desktop account (international workbuddy.ai and/or China workbuddy.cn) as an OpenAI- and Anthropic-compatible API — a local model provider for Claude Code, Codex, and any coding agent.",
   "keywords": [

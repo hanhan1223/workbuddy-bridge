@@ -36,10 +36,11 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 if (opts.help) {
-  console.log(`workbuddy-bridge doctor — check this machine for a usable WorkBuddy account
+  console.log(`workbuddy-doctor — check this machine for a usable WorkBuddy account
 
 Usage
-  node doctor.js [options]
+  workbuddy-doctor [options]        (installed via npm)
+  node doctor.js [options]          (from a cloned checkout)
 
 Options
   --refresh, -r    Force a token refresh for every detected edition
