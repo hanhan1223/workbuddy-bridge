@@ -29,11 +29,11 @@
     "url": "https://github.com/hanhan1223/workbuddy-bridge/issues"
   },
   "bin": {
-    "workbuddy-bridge": "./http-server.js",
-    "workbuddy-bridge-mcp": "./server.js",
-    "workbuddy-doctor": "./doctor.js"
+    "workbuddy-bridge": "http-server.js",
+    "workbuddy-bridge-mcp": "server.js",
+    "workbuddy-doctor": "doctor.js"
   },
-  "main": "./http-server.js",
+  "main": "http-server.js",
   "exports": {
     ".": "./providers.js",
     "./upstream": "./upstream.js",
@@ -42,7 +42,8 @@
     "./providers": "./providers.js",
     "./responses": "./responses.js",
     "./server": "./server.js",
-    "./doctor": "./doctor.js"
+    "./doctor": "./doctor.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "http-server.js",
