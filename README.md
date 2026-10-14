@@ -4,6 +4,8 @@
 
 国际版（`workbuddy.ai`）与国内版（`workbuddy.cn`）**都支持，自动检测**。
 
+**中文** | [English](README.en.md)
+
 [![npm version](https://img.shields.io/npm/v/workbuddy-bridge.svg)](https://www.npmjs.com/package/workbuddy-bridge)
 [![npm downloads](https://img.shields.io/npm/dm/workbuddy-bridge.svg)](https://www.npmjs.com/package/workbuddy-bridge)
 [![license](https://img.shields.io/npm/l/workbuddy-bridge.svg)](LICENSE)
@@ -484,8 +486,7 @@ workbuddy-bridge/
 ├── credentials.js   令牌读取/解密（AES-256-GCM）+ 自动刷新
 ├── locate.js        双版本可执行文件定位
 ├── server.js        MCP 服务
-├── doctor.js        环境检测
-└── HTTP-BRIDGE.md   开发与调试过程记录（含踩坑复盘）
+└── doctor.js        环境检测
 ```
 
 | 文件 | 负责 |
@@ -536,5 +537,3 @@ workbuddy-bridge/
 ## 致谢
 
 - 上游端点与请求格式的还原，参考了 [`dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 的公开实现与实测记录。
-- 详细的开发与调试过程见 [`HTTP-BRIDGE.md`](HTTP-BRIDGE.md)，其中记录了渠道识别触发词、
-  工具调用链路上的三个连环 bug（含 A/B 对照实验），以及一份关于「如何避免误诊」的复盘。
