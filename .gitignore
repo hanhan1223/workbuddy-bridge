@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Credentials and tokens — NEVER commit these.
+# The bridge reads the desktop app's own auth file and caches refreshed tokens
+# under $DSH_HOME; both contain live account tokens.
+*.info
+.workbuddy-*
+.env
+.env.*
+
+# Local caches written by locate.js / providers.js
+.workbuddy-ai-electron.json
+.workbuddy-cn-electron.json
+.workbuddy-ai-auth.json
+.workbuddy-cn-auth.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Logs and scratch
+*.log
+*.tmp
+*.bak
+
+# Packed artifacts — the source is what belongs in the repo
+*.tgz

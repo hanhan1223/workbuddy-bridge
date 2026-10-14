@@ -1,0 +1,11 @@
+# Normalize line endings: the bridge targets Windows but is read on any platform.
+* text=auto eol=lf
+
+# Batch/PowerShell snippets pasted into docs keep CRLF.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+
+# Binary-ish
+*.png binary
+*.ico binary
+*.exe binary

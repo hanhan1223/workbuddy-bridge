@@ -1,0 +1,48 @@
+{
+  "name": "workbuddy-bridge",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local HTTP/MCP bridge exposing a WorkBuddy desktop account (international workbuddy.ai and/or China workbuddy.cn) as an OpenAI- and Anthropic-compatible API for Claude Code, Codex, and other coding agents.",
+  "keywords": [
+    "workbuddy",
+    "claude-code",
+    "codex",
+    "mcp",
+    "anthropic",
+    "openai",
+    "bridge",
+    "proxy"
+  ],
+  "license": "MIT",
+  "bin": {
+    "workbuddy-bridge": "./http-server.js",
+    "workbuddy-bridge-mcp": "./server.js"
+  },
+  "main": "./http-server.js",
+  "files": [
+    "http-server.js",
+    "responses.js",
+    "upstream.js",
+    "credentials.js",
+    "locate.js",
+    "providers.js",
+    "server.js",
+    "doctor.js",
+    "README.md",
+    "HTTP-BRIDGE.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node http-server.js",
+    "mcp": "node server.js",
+    "doctor": "node doctor.js"
+  },
+  "engines": {
+    "node": ">=20.3.0"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
