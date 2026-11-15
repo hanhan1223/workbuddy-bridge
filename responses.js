@@ -24,6 +24,7 @@
  */
 
 const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant.';
+const MISSING_TOOL_RESULT = 'Tool call did not complete and returned no output.';
 
 /** Flatten Responses content (string or array of parts) into plain text. */
 function contentToText(content) {
@@ -62,48 +63,70 @@ function responsesToChat(body, defaultModel) {
   if (typeof input === 'string') {
     messages.push({ role: 'user', content: input });
   } else if (Array.isArray(input)) {
+    // Consecutive function calls belong to ONE assistant message. The upstream
+    // rejects a history in which an assistant tool_call is not immediately
+    // answered by its tool result, so one assistant message per call breaks as
+    // soon as a turn issues parallel tool calls (Codex does this routinely).
+    let open = null;
+
+    const closeOpenAssistant = () => {
+      if (!open) return;
+      for (const id of open.calls) {
+        if (open.answered.has(id)) continue;
+        messages.push({ role: 'tool', tool_call_id: id, content: MISSING_TOOL_RESULT });
+        open.answered.add(id);
+      }
+      open = null;
+    };
+
     for (const item of input) {
       if (item === null || typeof item !== 'object') continue;
 
       // A function call the model previously made: replay it so the model can
       // see its own tool history (omitting it causes repeated re-calling).
       if (item.type === 'function_call') {
-        messages.push({
-          role: 'assistant',
-          content: typeof item.content === 'string' ? item.content : '',
-          tool_calls: [
-            {
-              id: typeof item.call_id === 'string' ? item.call_id : 'call_0',
-              type: 'function',
-              function: {
-                name: typeof item.name === 'string' ? item.name : '',
-                arguments:
-                  typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}),
-              },
-            },
-          ],
+        const callId =
+          typeof item.call_id === 'string' && item.call_id !== '' ? item.call_id : 'call_0';
+        if (open && open.calls.every((id) => open.answered.has(id))) open = null;
+        if (!open) {
+          open = { message: { role: 'assistant', content: '', tool_calls: [] }, calls: [], answered: new Set() };
+          messages.push(open.message);
+        }
+        if (open.calls.includes(callId)) continue;
+        open.calls.push(callId);
+        open.message.tool_calls.push({
+          id: callId,
+          type: 'function',
+          function: {
+            name: typeof item.name === 'string' ? item.name : '',
+            arguments:
+              typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}),
+          },
         });
         continue;
       }
 
       // The result of that call. `role: 'tool'` is required, and the call_id
-      // must match the call above or the upstream rejects the history.
+      // must match a call that is still waiting for its result; orphaned
+      // outputs (truncated or compacted history) are dropped.
       if (item.type === 'function_call_output') {
-        messages.push({
-          role: 'tool',
-          tool_call_id: typeof item.call_id === 'string' ? item.call_id : '',
-          content: contentToText(item.output),
-        });
+        const callId = typeof item.call_id === 'string' ? item.call_id : '';
+        if (!open || !open.calls.includes(callId) || open.answered.has(callId)) continue;
+        messages.push({ role: 'tool', tool_call_id: callId, content: contentToText(item.output) });
+        open.answered.add(callId);
         continue;
       }
 
       // Ordinary message item.
       if (item.type === 'message' || item.role !== undefined) {
+        closeOpenAssistant();
         const role = item.role === 'assistant' ? 'assistant' : item.role === 'system' ? 'system' : 'user';
         const text = contentToText(item.content);
         if (text !== '') messages.push({ role, content: text });
       }
     }
+
+    closeOpenAssistant();
   }
 
   const out = {
